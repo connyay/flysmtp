@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
+	"mime"
 	"os"
 	"strings"
 
@@ -11,6 +13,7 @@ import (
 
 func main() {
 	server := smtpd.NewServer(messageHandler)
+	server.MaxSize = 5 * 1024 * 1024
 
 	server.Extend("PROXY", &proxyHandler{})
 
@@ -24,7 +27,35 @@ func main() {
 }
 
 func messageHandler(msg *smtpd.Message) error {
-	log.Printf("New message from: %q subject: %q body: %s", msg.From, msg.Subject, msg.RawBody)
+	to := msg.To[0] // can panic
+	log.Printf("New message to: %q from: %q subject: %q body: %s", to, msg.From, msg.Subject, msg.RawBody)
+
+	parts, err := msg.Parts()
+	if err != nil {
+		return err
+	}
+	var (
+		image, description []byte
+	)
+	for _, part := range parts {
+		mediaType, _, err := mime.ParseMediaType(part.Header.Get("Content-Type"))
+		if err != nil {
+			return err
+		}
+		if strings.HasPrefix(mediaType, "text/plain") {
+			description = part.Body
+		}
+		if strings.HasPrefix(mediaType, "image/") {
+			image = part.Body
+		}
+		if description != nil && image != nil {
+			break
+		}
+	}
+	if description == nil || image == nil {
+		return errors.New("missing description or image")
+	}
+	log.Printf("description: %s, len(image): %d", description, len(image))
 	return nil
 }
 
@@ -35,7 +66,8 @@ type proxyHandler struct {
 
 // Handle implements the expected method for a smtp handler
 func (p *proxyHandler) Handle(conn *smtpd.Conn, methodBody string) error {
-	// remoteIP := strings.Split(conn.RemoteAddr().String(), ":")[0]
+	remoteIP := strings.Split(conn.RemoteAddr().String(), ":")[0]
+	log.Printf("Remote IP: %s", remoteIP)
 	// if !sliceContains(p.TrustIPs, remoteIP) {
 	// 	return errors.New("PROXY not allowed from '" + remoteIP + "'")
 	// }
